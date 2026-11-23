@@ -14,6 +14,7 @@ export interface Alarm {
   days: number[]; // 1 = Mon ... 7 = Sun, empty = once
   sound?: string; // '' = default tone, 'raw:name' = built-in, otherwise a content:// URI
   soundName?: string; // display name for custom sounds
+  vibrate?: boolean; // default true
 }
 
 export const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -42,12 +43,13 @@ const N = NativeModules.AuroraAlarm;
 
 export const AlarmNative = {
   schedule: (a: Alarm): Promise<void> =>
-    N.schedule(a.id, nextOccurrence(a).getTime(), a.label, a.h, a.m, a.days, a.sound ?? ''),
-  scheduleAt: (id: number, at: Date, label: string, days: number[], sound = ''): Promise<void> =>
-    N.schedule(id, at.getTime(), label, at.getHours(), at.getMinutes(), days, sound),
+    N.schedule(a.id, nextOccurrence(a).getTime(), a.label, a.h, a.m, a.days, a.sound ?? '', a.vibrate !== false),
+  scheduleAt: (id: number, at: Date, label: string, days: number[], sound = '', vibrate = true): Promise<void> =>
+    N.schedule(id, at.getTime(), label, at.getHours(), at.getMinutes(), days, sound, vibrate),
   pickSound: (current: string): Promise<{ uri: string; title: string } | null> => N.pickSound(current),
   previewSound: (sound: string): Promise<boolean> => N.previewSound(sound),
   stopPreview: (): Promise<void> => N.stopPreview(),
+  getInsets: (): Promise<{ top: number; bottom: number; left: number; right: number } | null> => N.getInsets(),
   cancel: (id: number): Promise<void> => N.cancel(id),
   snooze: (id: number, at: number): Promise<void> => N.snooze(id, at),
   ringing: (): Promise<number> => N.ringing(),
@@ -87,4 +89,17 @@ export function nextDaily(h: number, m: number): Date {
   d.setHours(h, m, 0, 0);
   if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
   return d;
+}
+
+export function repeatSummary(days: number[]): string {
+  if (days.length === 0) return 'Once';
+  if (days.length === 7) return 'Daily';
+  const key = [...days].sort().join('');
+  if (key === '12345') return 'Mon – Fri';
+  if (key === '67') return 'Weekend';
+  return days.map((d) => DAY_NAMES[d - 1]).join(', ');
+}
+
+export function dateLabel(d: Date): string {
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }

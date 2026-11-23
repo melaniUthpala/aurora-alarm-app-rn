@@ -1,0 +1,30 @@
+// AURORA Neon Glass design tokens (from the AURORA UI kit)
+export const T = {
+  colors: {
+    bg: '#080318',
+    bg2: '#13052D',
+    surface: 'rgba(43, 17, 83, 0.62)',
+    surfaceStrong: 'rgba(48, 18, 96, 0.92)',
+    border: 'rgba(190, 116, 255, 0.38)',
+    borderStrong: 'rgba(200, 138, 255, 0.75)',
+    violet: '#A855F7',
+    purple: '#7C3AED',
+    magenta: '#E879F9',
+    cyan: '#67D9FF',
+    gold: '#FFC857',
+    text: '#FFFFFF',
+    muted: '#C7B9E8',
+    dim: '#897BAA',
+    danger: '#FF6B91',
+    success: '#B7FF7A',
+    trackOff: '#40365B',
+    trackOn: '#8B36F6',
+  },
+  grad: {
+    primary: ['#5B6BFF', '#8B3DFF', '#B24DFF'],
+    magenta: ['#8F3DFF', '#C54DFF', '#F06BFF'],
+    bubble: ['#6827B8', '#210A50'],
+    neon: ['#67D9FF', '#A855F7', '#E879F9'],
+  },
+  radius: { sm: 14, md: 22, lg: 28, pill: 999 },
+};

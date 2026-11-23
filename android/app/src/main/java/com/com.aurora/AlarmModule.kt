@@ -15,6 +15,9 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
+import android.util.DisplayMetrics
+import android.view.View
+import android.view.WindowInsets
 import android.provider.Settings
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.Arguments
@@ -66,12 +69,12 @@ class AlarmModule(private val rc: ReactApplicationContext) : ReactContextBaseJav
 
     // ---------------- alarms ----------------
     @ReactMethod
-    fun schedule(id: Int, at: Double, label: String, h: Int, m: Int, days: ReadableArray, sound: String, promise: Promise) {
+    fun schedule(id: Int, at: Double, label: String, h: Int, m: Int, days: ReadableArray, sound: String, vibrate: Boolean, promise: Promise) {
         try {
             val arr = JSONArray()
             for (i in 0 until days.size()) arr.put(days.getInt(i))
             val obj = JSONObject().put("id", id).put("at", at.toLong()).put("label", label)
-                .put("h", h).put("m", m).put("days", arr).put("sound", sound)
+                .put("h", h).put("m", m).put("days", arr).put("sound", sound).put("vibrate", vibrate)
             Scheduler.set(rc, obj)
             prefs().edit().putString("alarm_$id", obj.toString()).apply()
             promise.resolve(null)
@@ -194,6 +197,75 @@ class AlarmModule(private val rc: ReactApplicationContext) : ReactContextBaseJav
             rc.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${rc.packageName}"))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         promise.resolve(null)
+    }
+
+    // ---------------- safe-area insets (status bar / navigation bar / cutout) ----------------
+    // Returns, in dp, how far the app content really extends underneath each system bar, so the
+    // JS layout can pad exactly that amount (3-button nav, gesture nav, edge-to-edge, notches).
+    // WindowInsets can report 0 on some phones/Android versions, so the real system bar sizes
+    // from the framework resources are used as a fallback.
+    @Suppress("DEPRECATION")
+    @ReactMethod
+    fun getInsets(promise: Promise) {
+        val act = rc.currentActivity
+        if (act == null) { promise.resolve(null); return }
+        act.runOnUiThread {
+            try {
+                val content = act.findViewById<View>(android.R.id.content)
+                if (content == null || content.height <= 0) {
+                    promise.resolve(null)
+                } else {
+                    val res = rc.resources
+                    fun sysDim(name: String): Int {
+                        val id = res.getIdentifier(name, "dimen", "android")
+                        return if (id > 0) res.getDimensionPixelSize(id) else 0
+                    }
+
+                    // 1) what WindowInsets says (may be 0)
+                    var wiTop = 0
+                    var wiBottom = 0
+                    var wiLeft = 0
+                    var wiRight = 0
+                    val wi = act.window.decorView.rootWindowInsets
+                    if (wi != null) {
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            val b = wi.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                            wiTop = b.top; wiBottom = b.bottom; wiLeft = b.left; wiRight = b.right
+                        } else {
+                            wiTop = wi.stableInsetTop; wiBottom = wi.stableInsetBottom
+                            wiLeft = wi.stableInsetLeft; wiRight = wi.stableInsetRight
+                        }
+                    }
+
+                    // 2) real system bar sizes from the framework resources
+                    val navMode = try { Settings.Secure.getInt(rc.contentResolver, "navigation_mode", 0) } catch (e: Exception) { 0 }
+                    val resNav = if (navMode == 2) sysDim("navigation_bar_gesture_height") else sysDim("navigation_bar_height")
+                    val top = maxOf(wiTop, sysDim("status_bar_height"))
+                    val bottom = if (wiBottom > 0) wiBottom else resNav
+                    val left = wiLeft
+                    val right = wiRight
+
+                    // 3) how much of each bar the content actually covers
+                    val dm = DisplayMetrics()
+                    act.windowManager.defaultDisplay.getRealMetrics(dm)
+                    val loc = IntArray(2)
+                    content.getLocationOnScreen(loc)
+                    val ovTop = minOf(top, maxOf(0, top - loc[1]))
+                    val ovBottom = minOf(bottom, maxOf(0, (loc[1] + content.height) - (dm.heightPixels - bottom)))
+                    val ovLeft = minOf(left, maxOf(0, left - loc[0]))
+                    val ovRight = minOf(right, maxOf(0, (loc[0] + content.width) - (dm.widthPixels - right)))
+                    val d = dm.density.toDouble()
+                    val map = Arguments.createMap()
+                    map.putDouble("top", ovTop / d)
+                    map.putDouble("bottom", ovBottom / d)
+                    map.putDouble("left", ovLeft / d)
+                    map.putDouble("right", ovRight / d)
+                    promise.resolve(map)
+                }
+            } catch (e: Exception) {
+                promise.resolve(null)
+            }
+        }
     }
 
     // ---------------- real accelerometer shake (gravity removed) ----------------

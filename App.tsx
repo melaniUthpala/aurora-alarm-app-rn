@@ -1,45 +1,43 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, AppState, BackHandler, PermissionsAndroid, Platform, Pressable, ScrollView,
-  StatusBar, Switch, ToastAndroid, View,
+  Alert, AppState, BackHandler, Image, PermissionsAndroid, Platform, Pressable, ScrollView,
+  StatusBar, ToastAndroid, View,
 } from 'react-native';
 import { storage } from './src/storage';
 import {
-  Alarm, AlarmNative, BEDTIME_ID, TIMER_ID, UTILITY_BASE, greeting, nextDaily, nextOccurrence, pad, timeStr, untilText,
+  Alarm, AlarmNative, BEDTIME_ID, TIMER_ID, UTILITY_BASE, dateLabel, greeting, nextDaily, nextOccurrence,
+  pad, repeatSummary, timeStr, untilText,
 } from './src/lib';
-import { soundLabel } from './src/sounds';
-import { ACCENT_SOLID, BigTime, Btn, DayDots, Glass, Hero, IconBtn, Label, Screen, Txt } from './src/ui';
-import { Editor, History, Prefs, Ring, RingResult, Settings } from './src/screens';
+import { T } from './src/theme';
 import {
-  Bedtime, BedtimeCfg, DEFAULT_BEDTIME, Stopwatch, Timer, UtilRing, WorldClock, bedtimeOf,
+  AVATAR, AlarmCard, BigTime, BottomNav, CircleBtn, GlassCard, Icon, IconBubble, NavKey, NeonButton, Screen, Txt,
+} from './src/ui';
+import { AlarmMenu, Editor, History, Prefs, Ring, RingResult, Settings } from './src/screens';
+import {
+  BedtimeCfg, BedtimeScreen, DEFAULT_BEDTIME, Stopwatch, Timer, UtilRing, WorldClock, bedtimeOf,
 } from './src/clocks';
+import { Splash } from './src/Splash';
+import { InsetsProvider } from './src/insets';
 
 type Route =
   | { name: 'home' }
   | { name: 'editor'; alarm?: Alarm; template?: Partial<Alarm> }
-  | { name: 'settings' }
   | { name: 'history' }
+  | { name: 'bedtime' }
   | { name: 'ring'; alarm: Alarm; preview: boolean }
   | { name: 'utilRing'; kind: 'timer' | 'bedtime' };
 
-type Tab = 'world' | 'alarm' | 'bed' | 'stopwatch' | 'timer';
-const TABS: { k: Tab; icon: string; label: string }[] = [
-  { k: 'world', icon: '🌍', label: 'World' },
-  { k: 'alarm', icon: '⏰', label: 'Alarm' },
-  { k: 'bed', icon: '🛏️', label: 'Bedtime' },
-  { k: 'stopwatch', icon: '⏱️', label: 'Stopwatch' },
-  { k: 'timer', icon: '⏳', label: 'Timer' },
-];
-
-export default function App() {
+function AppInner() {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
   const [history, setHistory] = useState<string[]>([]);
   const [prefs, setPrefs] = useState<Prefs>({ name: 'Alex', photo: '', dark: true, h24: false });
   const [bed, setBed] = useState<BedtimeCfg>(DEFAULT_BEDTIME);
   const [ready, setReady] = useState(false);
+  const [splash, setSplash] = useState(true);
   const [route, setRoute] = useState<Route>({ name: 'home' });
-  const [tab, setTab] = useState<Tab>('alarm');
-  const [visited, setVisited] = useState<Record<string, boolean>>({ alarm: true });
+  const [nav, setNav] = useState<NavKey>('home');
+  const [visited, setVisited] = useState<Record<string, boolean>>({ home: true });
+  const [menuAlarm, setMenuAlarm] = useState<Alarm | null>(null);
   const [, tick] = useState(0);
 
   const storageWarned = useRef(false);
@@ -52,7 +50,13 @@ export default function App() {
   const ringingRef = useRef(false);
   alarmsRef.current = alarms;
 
-  const selectTab = (k: Tab) => { setTab(k); setVisited((p) => ({ ...p, [k]: true })); };
+  const selectNav = (k: NavKey) => { setNav(k); setVisited((p) => ({ ...p, [k]: true })); };
+
+  // ---------- splash ----------
+  useEffect(() => {
+    const t = setTimeout(() => setSplash(false), 1900);
+    return () => clearTimeout(t);
+  }, []);
 
   // ---------- load / save ----------
   useEffect(() => {
@@ -139,10 +143,11 @@ export default function App() {
       }
       if (route.name === 'utilRing') return true;
       if (route.name !== 'home') { setRoute({ name: 'home' }); return true; }
+      if (nav !== 'home') { setNav('home'); return true; }
       return false;
     });
     return () => sub.remove();
-  }, [route]);
+  }, [route, nav]);
 
   // ---------- actions ----------
   const schedule = async (a: Alarm) => {
@@ -155,7 +160,7 @@ export default function App() {
       await schedule(a);
       setAlarms((p) => [...p.filter((x) => x.id !== a.id), a]);
       setRoute({ name: 'home' });
-      selectTab('alarm');
+      selectNav('home');
       if (a.enabled) {
         ToastAndroid.show(`Alarm set for ${timeStr(a.h, a.m, prefs.h24)} • ${untilText(nextOccurrence(a))}`, ToastAndroid.LONG);
       }
@@ -178,6 +183,12 @@ export default function App() {
     try { await AlarmNative.cancel(a.id); } catch {}
     setAlarms((p) => p.filter((x) => x.id !== a.id));
   };
+
+  const confirmRemove = (a: Alarm) =>
+    Alert.alert('Delete alarm', `Delete “${a.label}”?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => { remove(a); } },
+    ]);
 
   const onRingFinish = async (result: RingResult) => {
     if (route.name !== 'ring') return;
@@ -217,121 +228,113 @@ export default function App() {
     }
   };
 
-  // ---------- routing ----------
-  if (!ready) return <Screen dark><View /></Screen>;
+  // ---------- splash ----------
+  if (!ready || (splash && route.name === 'home')) {
+    return (
+      <>
+        <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+        <Splash dark={prefs.dark} />
+      </>
+    );
+  }
 
   const home = route.name === 'home';
-  const tabStyle = (k: Tab) => ({ flex: 1, display: tab === k ? ('flex' as const) : ('none' as const) });
+  const tabStyle = (k: NavKey) => ({ flex: 1, display: nav === k ? ('flex' as const) : ('none' as const) });
 
-  // ----- Alarm tab -----
+  // ----- Home tab -----
+  const now = new Date();
+  const hr = now.getHours();
   const enabled = alarms.filter((a) => a.enabled).sort((a, b) => nextOccurrence(a).getTime() - nextOccurrence(b).getTime());
   const sorted = [...alarms].sort((a, b) => a.h * 60 + a.m - (b.h * 60 + b.m));
   const nxt = enabled[0];
+  const bt = bedtimeOf(bed);
+  const day = hr >= 6 && hr < 18;
 
-  const alarmTab = (
+  const homeTab = (
     <View style={{ flex: 1 }}>
-      <ScrollView contentContainerStyle={{ padding: 22, paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 22 }}>
-          <View style={{ flex: 1 }}>
-            <Txt style={{ opacity: 0.6, fontSize: 15 }}>{greeting()}</Txt>
-            <Txt style={{ fontSize: 30, fontWeight: '700' }} numberOfLines={1}>{prefs.name || 'there'}</Txt>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 10 }} showsVerticalScrollIndicator={false}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 6 }}>
+          <Pressable onPress={() => selectNav('settings')}>
+            <View style={{ width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: T.colors.magenta, padding: 2 }}>
+              <Image source={prefs.photo ? { uri: prefs.photo } : AVATAR} style={{ width: '100%', height: '100%', borderRadius: 25 }} />
+            </View>
+          </Pressable>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Txt style={{ color: T.colors.muted, fontSize: 14 }}>{greeting()}!</Txt>
+            <Txt style={{ fontSize: 22, fontWeight: '700' }} numberOfLines={1}>{prefs.name || 'there'} ♡</Txt>
           </View>
-          <IconBtn icon="🕘" onPress={() => setRoute({ name: 'history' })} />
-          <IconBtn icon="⚙️" onPress={() => setRoute({ name: 'settings' })} />
+          <CircleBtn icon="settings" onPress={() => selectNav('settings')} />
         </View>
 
-        <Hero>
-          <Label>Next alarm</Label>
-          {nxt ? (
-            <>
-              <BigTime h={nxt.h} m={nxt.m} h24={prefs.h24} size={64} weight="200" />
-              <Txt style={{ fontSize: 16, opacity: 0.85, marginTop: 2 }}>{nxt.label}  ·  {untilText(nextOccurrence(nxt))}</Txt>
-            </>
-          ) : (
-            <>
-              <Txt style={{ fontSize: 30, fontWeight: '300', marginTop: 4 }}>No alarm set</Txt>
-              <Txt style={{ opacity: 0.6, marginTop: 4 }}>Tap “Add alarm” to get started</Txt>
-            </>
-          )}
-        </Hero>
+        <View style={{ marginTop: 22, marginBottom: 20 }}>
+          <BigTime h={hr} m={now.getMinutes()} h24={prefs.h24} size={64} weight="600" glow />
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+            <Txt style={{ color: T.colors.muted, fontSize: 16 }}>{dateLabel(now)}</Txt>
+            <View style={{ marginLeft: 10 }}>
+              <Icon name={day ? 'sun' : 'moon-star'} size={20} color={day ? T.colors.gold : T.colors.cyan} />
+            </View>
+          </View>
+          <Txt style={{ color: T.colors.magenta, fontSize: 13, marginTop: 6 }}>
+            {nxt ? `Next alarm ${untilText(nextOccurrence(nxt))}  ·  ${timeStr(nxt.h, nxt.m, prefs.h24)}` : 'No alarm set'}
+          </Txt>
+        </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
-          <Txt style={{ fontSize: 20, fontWeight: '700' }}>My alarms</Txt>
-          <Txt style={{ opacity: 0.5 }}>{alarms.length}</Txt>
+          <Txt style={{ fontSize: 19, fontWeight: '700' }}>Your Alarms</Txt>
+          <Txt style={{ color: T.colors.muted, fontSize: 13 }}>{alarms.length} {alarms.length === 1 ? 'Alarm' : 'Alarms'}</Txt>
         </View>
 
         {sorted.length === 0 && (
-          <Glass style={{ alignItems: 'center', paddingVertical: 30 }}>
-            <Txt style={{ fontSize: 34 }}>⏰</Txt>
-            <Txt style={{ opacity: 0.6, marginTop: 8 }}>No alarms yet</Txt>
-          </Glass>
+          <GlassCard style={{ alignItems: 'center', paddingVertical: 30 }}>
+            <Icon name="alarm-clock" size={34} color={T.colors.muted} />
+            <Txt style={{ color: T.colors.muted, marginTop: 10 }}>No alarms yet. Tap “Add Alarm”.</Txt>
+          </GlassCard>
         )}
 
         {sorted.map((a) => (
-          <Glass key={a.id} style={{ opacity: a.enabled ? 1 : 0.6 }}>
-            <Pressable onPress={() => setRoute({ name: 'editor', alarm: a })} style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ flex: 1 }}>
-                <BigTime h={a.h} m={a.m} h24={prefs.h24} size={38} weight="300" />
-                <Txt style={{ opacity: 0.7, marginTop: 2 }} numberOfLines={1}>{a.label}  ·  {a.challenge}</Txt>
-                <Txt style={{ opacity: 0.45, fontSize: 12, marginTop: 2 }} numberOfLines={1}>♪ {soundLabel(a.sound, a.soundName)}</Txt>
-                {a.days.length === 0 ? (
-                  <Txt style={{ opacity: 0.45, fontSize: 13, marginTop: 8 }}>Once</Txt>
-                ) : (
-                  <DayDots days={a.days} compact />
-                )}
-              </View>
-              <Switch
-                value={a.enabled}
-                onValueChange={(v) => toggle(a, v)}
-                thumbColor="#fff"
-                trackColor={{ false: 'rgba(255,255,255,0.25)', true: ACCENT_SOLID }}
-              />
-            </Pressable>
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 }}>
-              <Pressable onPress={() => setRoute({ name: 'ring', alarm: a, preview: true })} style={{ paddingVertical: 6, paddingHorizontal: 12 }}>
-                <Txt style={{ opacity: 0.6, fontSize: 14 }}>Try challenge</Txt>
-              </Pressable>
-              <Pressable onPress={() => remove(a)} style={{ paddingVertical: 6, paddingHorizontal: 12 }}>
-                <Txt style={{ color: '#ff8f9c', fontSize: 14 }}>Delete</Txt>
-              </Pressable>
-            </View>
-          </Glass>
+          <AlarmCard
+            key={a.id}
+            h={a.h}
+            m={a.m}
+            h24={prefs.h24}
+            repeat={repeatSummary(a.days)}
+            label={a.label}
+            enabled={a.enabled}
+            onToggle={(v) => toggle(a, v)}
+            onPress={() => setRoute({ name: 'editor', alarm: a })}
+            onMenu={() => setMenuAlarm(a)}
+          />
         ))}
 
-        <Pressable onPress={requestPermissions} style={{ padding: 16, alignItems: 'center' }}>
-          <Txt style={{ opacity: 0.5, fontSize: 13 }}>Alarm permissions</Txt>
-        </Pressable>
+        <View style={{ flexDirection: 'row', marginTop: 2 }}>
+          <Pressable style={{ flex: 1, marginRight: 6 }} onPress={() => setRoute({ name: 'bedtime' })}>
+            <GlassCard style={{ padding: 12, marginBottom: 0, flexDirection: 'row', alignItems: 'center' }}>
+              <IconBubble icon="bed" size={40} />
+              <View style={{ marginLeft: 10, flex: 1 }}>
+                <Txt style={{ fontWeight: '700' }}>Bedtime</Txt>
+                <Txt style={{ color: T.colors.muted, fontSize: 12 }} numberOfLines={1}>{timeStr(bt.h, bt.m, prefs.h24)}{bed.enabled ? ' · on' : ''}</Txt>
+              </View>
+            </GlassCard>
+          </Pressable>
+          <Pressable style={{ flex: 1, marginLeft: 6 }} onPress={() => setRoute({ name: 'history' })}>
+            <GlassCard style={{ padding: 12, marginBottom: 0, flexDirection: 'row', alignItems: 'center' }}>
+              <IconBubble icon="history" size={40} />
+              <View style={{ marginLeft: 10, flex: 1 }}>
+                <Txt style={{ fontWeight: '700' }}>History</Txt>
+                <Txt style={{ color: T.colors.muted, fontSize: 12 }} numberOfLines={1}>{history.length} events</Txt>
+              </View>
+            </GlassCard>
+          </Pressable>
+        </View>
       </ScrollView>
 
-      <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 10 }}>
-        <Btn title="＋  Add alarm" onPress={() => setRoute({ name: 'editor' })} />
+      <View style={{ paddingHorizontal: 20, paddingTop: 10, paddingBottom: 8 }}>
+        <NeonButton title="Add Alarm" icon="plus" onPress={() => setRoute({ name: 'editor' })} />
       </View>
     </View>
   );
 
-  // ----- bottom tab bar -----
-  const tabBar = (
-    <View style={{
-      flexDirection: 'row', marginHorizontal: 14, marginBottom: 14, marginTop: 4, padding: 6, borderRadius: 28,
-      backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)',
-    }}>
-      {TABS.map((t) => {
-        const on = tab === t.k;
-        return (
-          <Pressable
-            key={t.k}
-            onPress={() => selectTab(t.k)}
-            style={{ flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 22, backgroundColor: on ? 'rgba(255,138,115,0.22)' : 'transparent' }}
-          >
-            <Txt style={{ fontSize: 20 }}>{t.icon}</Txt>
-            <Txt style={{ fontSize: 11, marginTop: 2, opacity: on ? 1 : 0.55, fontWeight: on ? '700' : '500' }}>{t.label}</Txt>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-
-  // ----- full-screen routes (editor, settings, ring ...) -----
+  // ----- full-screen routes -----
   let overlay: React.ReactNode = null;
   if (route.name === 'editor') {
     overlay = (
@@ -339,16 +342,27 @@ export default function App() {
         key={route.alarm?.id ?? 'new'}
         alarm={route.alarm}
         template={route.template}
+        defaults={{ sound: prefs.defaultSound, soundName: prefs.defaultSoundName }}
         dark={prefs.dark}
         h24={prefs.h24}
         onSave={saveAlarm}
+        onDelete={(a) => { remove(a); setRoute({ name: 'home' }); }}
         onBack={() => setRoute({ name: 'home' })}
       />
     );
-  } else if (route.name === 'settings') {
-    overlay = <Settings prefs={prefs} onChange={(p) => setPrefs((o) => ({ ...o, ...p }))} onBack={() => setRoute({ name: 'home' })} />;
   } else if (route.name === 'history') {
     overlay = <History items={history} dark={prefs.dark} onBack={() => setRoute({ name: 'home' })} />;
+  } else if (route.name === 'bedtime') {
+    overlay = (
+      <BedtimeScreen
+        cfg={bed}
+        h24={prefs.h24}
+        dark={prefs.dark}
+        onChange={changeBed}
+        onCreateAlarm={(h, m) => { selectNav('home'); setRoute({ name: 'editor', template: { h, m } }); }}
+        onBack={() => setRoute({ name: 'home' })}
+      />
+    );
   } else if (route.name === 'ring') {
     overlay = <Ring key={`${route.alarm.id}-${route.preview}`} alarm={route.alarm} dark={prefs.dark} h24={prefs.h24} preview={route.preview} onFinish={onRingFinish} />;
   } else if (route.name === 'utilRing') {
@@ -362,25 +376,42 @@ export default function App() {
       <View style={{ flex: 1, display: home ? 'flex' : 'none' }}>
         <Screen dark={prefs.dark}>
           <View style={{ flex: 1 }}>
-            <View style={tabStyle('alarm')}>{alarmTab}</View>
+            <View style={tabStyle('home')}>{homeTab}</View>
             {visited.world && <View style={tabStyle('world')}><WorldClock h24={prefs.h24} /></View>}
-            {visited.bed && (
-              <View style={tabStyle('bed')}>
-                <Bedtime
-                  cfg={bed}
-                  h24={prefs.h24}
-                  onChange={changeBed}
-                  onCreateAlarm={(h, m) => { selectTab('alarm'); setRoute({ name: 'editor', template: { h, m } }); }}
+            {visited.stopwatch && <View style={tabStyle('stopwatch')}><Stopwatch /></View>}
+            {visited.timer && <View style={tabStyle('timer')}><Timer /></View>}
+            {visited.settings && (
+              <View style={tabStyle('settings')}>
+                <Settings
+                  prefs={prefs}
+                  onChange={(p) => setPrefs((o) => ({ ...o, ...p }))}
+                  onOpenBedtime={() => setRoute({ name: 'bedtime' })}
+                  onOpenHistory={() => setRoute({ name: 'history' })}
+                  onPermissions={requestPermissions}
                 />
               </View>
             )}
-            {visited.stopwatch && <View style={tabStyle('stopwatch')}><Stopwatch /></View>}
-            {visited.timer && <View style={tabStyle('timer')}><Timer /></View>}
           </View>
-          {tabBar}
+          <BottomNav active={nav} onSelect={selectNav} />
         </Screen>
       </View>
       {!home && overlay}
+
+      <AlarmMenu
+        alarm={menuAlarm}
+        onClose={() => setMenuAlarm(null)}
+        onEdit={() => menuAlarm && setRoute({ name: 'editor', alarm: menuAlarm })}
+        onTry={() => menuAlarm && setRoute({ name: 'ring', alarm: menuAlarm, preview: true })}
+        onDelete={() => menuAlarm && confirmRemove(menuAlarm)}
+      />
     </View>
+  );
+}
+
+export default function App() {
+  return (
+    <InsetsProvider>
+      <AppInner />
+    </InsetsProvider>
   );
 }

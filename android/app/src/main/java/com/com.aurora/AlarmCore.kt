@@ -121,6 +121,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val service = Intent(c, AlarmSoundService::class.java)
             .putExtra("label", o.optString("label", "Wake Up"))
             .putExtra("sound", o.optString("sound", ""))
+            .putExtra("vibrate", o.optBoolean("vibrate", true))
         if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(service) else c.startService(service)
     }
 }
@@ -185,12 +186,14 @@ class AlarmSoundService : Service() {
         val wanted = i?.getStringExtra("sound")
         if (!startPlayer(resolveSoundUri(this, wanted))) startPlayer(resolveSoundUri(this, ""))
 
-        vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
-        if (Build.VERSION.SDK_INT >= 26) {
-            vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 600, 500), 0))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator?.vibrate(longArrayOf(0, 600, 500), 0)
+        if (i?.getBooleanExtra("vibrate", true) != false) {
+            vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= 26) {
+                vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 600, 500), 0))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(longArrayOf(0, 600, 500), 0)
+            }
         }
 
         handler.removeCallbacksAndMessages(null)
